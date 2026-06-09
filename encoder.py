@@ -1,4 +1,4 @@
-import os, sys, time, asyncio, json, base64, shutil, traceback, ast, zipfile
+import os, sys, time, asyncio, json, base64, shutil, traceback, ast, zipfile, inspect
 import urllib.request
 
 # 🚨 GUARANTEED EMERGENCY ALERT SYSTEM 🚨
@@ -6,14 +6,28 @@ _chat_id_str = os.getenv("CHAT_ID", "0").strip()
 _raw_dump = os.getenv("DUMP_ID", "none")
 _bot_token = os.getenv("BOT_TOKEN", "").strip()
 
+# Safe Base64 Decoder to prevent decoding failures
+def safe_b64_decode(b64_str):
+    try:
+        b64_str = b64_str.strip()
+        b64_str = b64_str.replace('-', '+').replace('_', '/')
+        padding = len(b64_str) % 4
+        if padding == 2:
+            b64_str += '=='
+        elif padding == 3:
+            b64_str += '='
+        return base64.b64decode(b64_str).decode('utf-8')
+    except Exception as e:
+        print(f"B64 Helper Error: {e}")
+        return "{}"
+
 if ":::" in _raw_dump:
     parts = _raw_dump.split(":::")
     if len(parts) > 4:
         try:
             raw_set = parts[4]
-            pad = len(raw_set) % 4
-            if pad: raw_set += "=" * (4 - pad)
-            _settings = json.loads(base64.urlsafe_b64decode(raw_set).decode('utf-8'))
+            decoded_json_str = safe_b64_decode(raw_set)
+            _settings = json.loads(decoded_json_str)
             _bot_token = _settings.get('__bot_token', _bot_token)
         except: pass
 
@@ -71,12 +85,13 @@ try:
         if len(parts) > 4:
             try: 
                 raw_set = parts[4]
-                pad = len(raw_set) % 4
-                if pad: raw_set += "=" * (4 - pad)
-                USER_SETTINGS = json.loads(base64.urlsafe_b64decode(raw_set).decode('utf-8'))
-            except:
-                try: USER_SETTINGS = ast.literal_eval(parts[4])
-                except: pass
+                decoded_json_str = safe_b64_decode(raw_set)
+                USER_SETTINGS = json.loads(decoded_json_str)
+            except Exception as b64_err:
+                print(f"Base64 Decode Exception: {b64_err}")
+                try: USER_SETTINGS = ast.literal_eval(raw_set)
+                except Exception as ast_err:
+                    print(f"AST Decode Exception: {ast_err}")
         if len(parts) > 5:
             USER_ID = parts[5]
 
@@ -137,9 +152,69 @@ try:
         try: await app.edit_message_text(CHAT_ID, msg_id, f"❌ **Cloud Worker Error:**\n\n`{error_msg[-1000:]}`")
         except: pass
 
+    # Smart fallback media uploader
+    async def safe_send_media(app, media_type, chat_id, thread, file_path, thumb_path, cap, has_thumb, progress_bar, msg_id, action_text):
+        method = app.send_video if media_type == "video" else app.send_document
+        sig = inspect.signature(method)
+        
+        kwargs = {
+            "chat_id": chat_id,
+            "caption": cap,
+            "progress": progress_bar,
+            "progress_args": (app, msg_id, action_text)
+        }
+        
+        if thumb_path and os.path.exists(thumb_path) and has_thumb:
+            kwargs["thumb"] = thumb_path
+        else:
+            kwargs["thumb"] = None
+
+        if media_type == "video":
+            kwargs["video"] = file_path
+            if "supports_streaming" in sig.parameters:
+                kwargs["supports_streaming"] = True
+        else:
+            kwargs["document"] = file_path
+            
+        if thread:
+            if "message_thread_id" in sig.parameters:
+                kwargs["message_thread_id"] = thread
+            elif "reply_to_message_id" in sig.parameters:
+                kwargs["reply_to_message_id"] = thread
+                
+        try:
+            await method(**kwargs)
+        except Exception as e:
+            # Fallback to document if send_video fails unexpectedly (e.g. streaming/codec errors)
+            if media_type == "video":
+                print(f"send_video failed ({e}). Falling back to send_document...")
+                if "video" in kwargs: 
+                    del kwargs["video"]
+                if "supports_streaming" in kwargs: 
+                    del kwargs["supports_streaming"]
+                
+                kwargs["document"] = file_path
+                doc_sig = inspect.signature(app.send_document)
+                doc_kwargs = {k: v for k, v in kwargs.items() if k in doc_sig.parameters}
+                await app.send_document(**doc_kwargs)
+            else:
+                raise e
+
     async def process_all():
-        app = Client("worker_down", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-        await app.start()
+        session_name = f"worker_{int(time.time() * 1000000)}"
+        app = Client(session_name, api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
+        try:
+            await app.start()
+        except Exception as auth_err:
+            err_str = str(auth_err)
+            if "FLOOD_WAIT" in err_str:
+                import re as re_module
+                match = re_module.search(r'(\d+)', err_str)
+                wait_sec = int(match.group(1)) if match else 60
+                await asyncio.sleep(wait_sec)
+                await app.start()
+            else:
+                raise
         
         cancel_kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_cloud_task_cloud")]])
         msg_id = None
@@ -196,28 +271,43 @@ try:
                     return
                     
             logo_path = None
-            if str(USER_SETTINGS.get('wm_status', 'ON')).upper() == 'ON' and LOGO_ID != "none":
-                try:
-                    orig_logo = await app.download_media(LOGO_ID, progress=progress_bar, progress_args=(app, msg_id, "📥 Downloading Logo"))
-                    if orig_logo:
-                        ext = os.path.splitext(orig_logo)[1]
-                        logo_path = f"safe_logo{ext}"
-                        shutil.move(orig_logo, logo_path)
-                except: pass
+            wm_type = USER_SETTINGS.get('wm_type', 'image')
+            wm_status = str(USER_SETTINGS.get('wm_status', 'ON')).upper()
+            wm_opacity = float(USER_SETTINGS.get('wm_opacity', 1.0))
+            wm_text = USER_SETTINGS.get('wm_text', '')
+            wm_font_color = USER_SETTINGS.get('wm_font_color', 'white')
+
+            if wm_status == 'ON':
+                if wm_type == 'image' and LOGO_ID != "none":
+                    try:
+                        orig_logo = await app.download_media(LOGO_ID, progress=progress_bar, progress_args=(app, msg_id, "📥 Downloading Logo"))
+                        if orig_logo:
+                            ext = os.path.splitext(orig_logo)[1]
+                            logo_path = f"safe_logo{ext}"
+                            shutil.move(orig_logo, logo_path)
+                    except: pass
+                elif wm_type == 'text' and wm_text:
+                    logo_path = None
             
             # == PHASE 2: ENCODE ==
             output = RENAME
             duration = await get_duration(video_path)
             os.makedirs("fonts", exist_ok=True)
             
-            crf = str(USER_SETTINGS.get('crf', '22')).split()[0]
-            preset = str(USER_SETTINGS.get('preset', 'slow')).split()[0]
-            codec = str(USER_SETTINGS.get('codec', 'libx264')).split()[0]
-            audiocodec = str(USER_SETTINGS.get('audiocodec', 'copy')).split()[0]
-            audio_bitrate = USER_SETTINGS.get('audio')
-            tune = USER_SETTINGS.get('tune')
-            bit_depth = USER_SETTINGS.get('bit')
-            fps = USER_SETTINGS.get('fps')
+            # Debug user settings payload in logs
+            print(f"--- DEBUG: USER_SETTINGS RECEIVED ---")
+            print(json.dumps(USER_SETTINGS, indent=4))
+            print(f"-------------------------------------")
+
+            # Parse user settings safely with default fallbacks
+            crf = str(USER_SETTINGS.get('crf') or '30').split()[0]
+            preset = str(USER_SETTINGS.get('preset') or 'veryfast').split()[0]
+            codec = str(USER_SETTINGS.get('codec') or 'libx264').split()[0]
+            audiocodec = str(USER_SETTINGS.get('audiocodec') or 'copy').split()[0]
+            audio_bitrate = USER_SETTINGS.get('audio') or 'Original'
+            tune = USER_SETTINGS.get('tune') or 'None'
+            bit_depth = USER_SETTINGS.get('bit') or '8bit'
+            fps = USER_SETTINGS.get('fps') or 'Original'
             
             v_args = ['-c:v', codec, '-preset', preset]
             if codec != 'copy':
@@ -229,8 +319,14 @@ try:
                 if fps and fps != "Original": v_args.extend(['-r', str(fps).split()[0]])
                 
             a_args = ['-c:a', audiocodec]
-            if audio_bitrate and audiocodec != 'copy':
+            if audio_bitrate and audiocodec != 'copy' and audio_bitrate != 'Original':
                 a_args.extend(['-b:a', str(audio_bitrate).split()[0]])
+
+            meta_args = []
+            for k, v in USER_SETTINGS.items():
+                if k.startswith('meta_') and v:
+                    tag = k[5:]
+                    meta_args.extend(['-metadata', f'{tag}={v}'])
 
             vid_w = 1280
             try:
@@ -242,43 +338,93 @@ try:
 
             wm_pos = USER_SETTINGS.get('wm_pos', 'tr')
             wm_size = int(USER_SETTINGS.get('wm_size', 15))
+            alpha = max(0.1, min(1.0, wm_opacity))
             
-            logo_width = int(vid_w * (wm_size / 100.0))
-            if logo_width % 2 != 0: logo_width += 1 
-            scale_wm = f"{logo_width}:-1"
-            
-            pos_map = {
+            overlay_pos = {
                 'tl': '10:10', 'tc': '(W-w)/2:10', 'tr': 'W-w-10:10',
                 'ml': '10:(H-h)/2', 'c': '(W-w)/2:(H-h)/2', 'mr': 'W-w-10:(H-h)/2',
                 'bl': '10:H-h-10', 'bc': '(W-w)/2:H-h-10', 'br': 'W-w-10:H-h-10'
             }
-            pos_val = pos_map.get(wm_pos, 'W-w-10:10')
-            use_logo = True if logo_path and str(USER_SETTINGS.get('wm_status', 'ON')).upper() == 'ON' else False
+            drawtext_pos = {
+                'tl': 'x=10:y=10', 'tc': 'x=(w-tw)/2:y=10', 'tr': 'x=w-tw-10:y=10',
+                'ml': 'x=10:y=(h-th)/2', 'c': 'x=(w-tw)/2:y=(h-th)/2', 'mr': 'x=w-tw-10:y=(h-th)/2',
+                'bl': 'x=10:y=h-th-10', 'bc': 'x=(w-tw)/2:y=h-th-10', 'br': 'x=w-tw-10:y=h-th-10'
+            }
+            use_wm = wm_status == 'ON' and ((wm_type == 'image' and logo_path) or (wm_type == 'text' and wm_text))
+
+            def make_image_wm_filter(base_filter):
+                lw = int(vid_w * (wm_size / 100.0))
+                if lw % 2 != 0: lw += 1
+                scale = f"{lw}:-1"
+                pos = overlay_pos.get(wm_pos, 'W-w-10:10')
+                if base_filter:
+                    return f"[1:v]format=rgba,colorchannelmixer=aa={alpha},scale={scale}[logo];[0:v]{base_filter}[base];[base][logo]overlay={pos}:format=yuv420"
+                return f"[1:v]format=rgba,colorchannelmixer=aa={alpha},scale={scale}[logo];[0:v][logo]overlay={pos}:format=yuv420"
+
+            def make_text_wm_filter(base_filter):
+                fs = max(12, int(24 * wm_size / 15))
+                safe_text = wm_text.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:").replace(",", "\\,")
+                dt_pos = drawtext_pos.get(wm_pos, 'x=w-tw-10:y=10')
+                font_file = ""
+                for candidate in ["font/vtks mint.ttf", "font/Gakuran-Demo.otf", "fonts/HelveticaRoundedLTStd-BdCn.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]:
+                    if os.path.exists(candidate):
+                        font_file = f":fontfile='{os.path.abspath(candidate).replace(chr(92), '/')}'"
+                        break
+                dt = f"drawtext=text='{safe_text}'{font_file}:fontsize={fs}:fontcolor={wm_font_color}@{alpha}:{dt_pos}"
+                if base_filter:
+                    return f"{base_filter},{dt}"
+                return dt
+
+            faststart = ['-movflags', '+faststart']
+
+            # Parse resolution from "480p" -> 480
+            try:
+                res_num = int(''.join(c for c in RESOLUTION if c.isdigit()))
+                scale_vf = f"scale=-2:{res_num},"
+            except:
+                scale_vf = ""
+            engine_name = "HARDSUB ENGINE"
 
             if TASK_TYPE == "hardsub":
+                try:
+                    res_num = int(''.join(c for c in RESOLUTION if c.isdigit()))
+                    scale_prefix = f"scale=-2:{res_num},"
+                except:
+                    scale_prefix = ""
                 fonts_dir = os.path.abspath("Fonts") if os.path.exists("Fonts") else os.path.abspath("fonts")
                 fonts_dir_escaped = fonts_dir.replace("\\", "/").replace(":", "\\:")
-                sub_filter = f"subtitles={os.path.basename(sub_path)}:fontsdir='{fonts_dir_escaped}'" if sub_path else ""
-
-                if use_logo:
-                    filter_complex = f"[1:v]format=rgba,scale={scale_wm}[logo];[0:v]{sub_filter}[subbed];[subbed][logo]overlay={pos_val}:format=yuv420" if sub_filter else f"[1:v]format=rgba,scale={scale_wm}[logo];[0:v][logo]overlay={pos_val}:format=yuv420"
-                    cmd = ['ffmpeg', '-y', '-i', video_path, '-i', logo_path, '-filter_complex', filter_complex, '-map', '0:a?', '-sn'] + v_args + a_args + ['-progress', 'pipe:1', output]
-                else:
-                    if sub_filter:
-                        cmd = ['ffmpeg', '-y', '-i', video_path, '-map', '0:v:0', '-map', '0:a?', '-sn', '-vf', sub_filter] + v_args + a_args + ['-progress', 'pipe:1', output]
+                sub_filter_str = f"subtitles={os.path.basename(sub_path)}:fontsdir='{fonts_dir_escaped}'" if sub_path else ""
+                if scale_prefix:
+                    sub_filter_str = f"{scale_prefix}{sub_filter_str}" if sub_filter_str else scale_prefix[:-1]
+                
+                if use_wm:
+                    if wm_type == 'image':
+                        vf = make_image_wm_filter(sub_filter_str)
+                        cmd = ['ffmpeg', '-y', '-i', video_path, '-i', logo_path, '-filter_complex', vf, '-map', '0:a?', '-sn'] + v_args + a_args + meta_args + faststart + ['-progress', 'pipe:1', output]
                     else:
-                        cmd = ['ffmpeg', '-y', '-i', video_path, '-map', '0:v:0', '-map', '0:a?', '-sn'] + v_args + a_args + ['-progress', 'pipe:1', output]
+                        vf = make_text_wm_filter(sub_filter_str)
+                        cmd = ['ffmpeg', '-y', '-i', video_path, '-map', '0:v:0', '-map', '0:a?', '-sn', '-vf', vf] + v_args + a_args + meta_args + faststart + ['-progress', 'pipe:1', output]
+                else:
+                    if sub_filter_str:
+                        cmd = ['ffmpeg', '-y', '-i', video_path, '-map', '0:v:0', '-map', '0:a?', '-sn', '-vf', sub_filter_str] + v_args + a_args + meta_args + faststart + ['-progress', 'pipe:1', output]
+                    else:
+                        cmd = ['ffmpeg', '-y', '-i', video_path, '-map', '0:v:0', '-map', '0:a?', '-sn'] + v_args + a_args + meta_args + faststart + ['-progress', 'pipe:1', output]
                 engine_name = "HARDSUB ENGINE"
             else:
                 vf_scale = f"scale=-2:{RESOLUTION}" if RESOLUTION != "original" else ""
-                if use_logo:
-                    filter_complex = f"[1:v]format=rgba,scale={scale_wm}[logo];[0:v]{vf_scale}[scaled];[scaled][logo]overlay={pos_val}:format=yuv420" if vf_scale else f"[1:v]format=rgba,scale={scale_wm}[logo];[0:v][logo]overlay={pos_val}:format=yuv420"
-                    cmd = ['ffmpeg', '-y', '-i', video_path, '-i', logo_path, '-filter_complex', filter_complex, '-map', '0:a?', '-sn'] + v_args + a_args + ['-progress', 'pipe:1', output]
+                
+                if use_wm:
+                    if wm_type == 'image':
+                        vf = make_image_wm_filter(vf_scale)
+                        cmd = ['ffmpeg', '-y', '-i', video_path, '-i', logo_path, '-filter_complex', vf, '-map', '0:a?', '-sn'] + v_args + a_args + meta_args + faststart + ['-progress', 'pipe:1', output]
+                    else:
+                        vf = make_text_wm_filter(vf_scale)
+                        cmd = ['ffmpeg', '-y', '-i', video_path, '-map', '0:v:0', '-map', '0:a?', '-sn', '-vf', vf] + v_args + a_args + meta_args + faststart + ['-progress', 'pipe:1', output]
                 else:
                     if vf_scale:
-                        cmd = ['ffmpeg', '-y', '-i', video_path, '-map', '0:v:0', '-map', '0:a?', '-sn', '-vf', vf_scale] + v_args + a_args + ['-progress', 'pipe:1', output]
+                        cmd = ['ffmpeg', '-y', '-i', video_path, '-map', '0:v:0', '-map', '0:a?', '-sn', '-vf', vf_scale] + v_args + a_args + meta_args + faststart + ['-progress', 'pipe:1', output]
                     else:
-                        cmd = ['ffmpeg', '-y', '-i', video_path, '-map', '0:v:0', '-map', '0:a?', '-sn'] + v_args + a_args + ['-progress', 'pipe:1', output]
+                        cmd = ['ffmpeg', '-y', '-i', video_path, '-map', '0:v:0', '-map', '0:a?', '-sn'] + v_args + a_args + meta_args + faststart + ['-progress', 'pipe:1', output]
                 engine_name = "COMPRESSION ENGINE"
 
             with open("ffmpeg_error.log", "w") as err_file:
@@ -330,12 +476,43 @@ try:
             # == PHASE 3: UPLOAD ==
             if proc.returncode == 0 and os.path.exists(output):
                 thumb_path = "thumb.jpg"
-                cmd_thumb = ['ffmpeg', '-y', '-ss', '00:00:05', '-i', output, '-vf', 'scale=320:-1', '-vframes', '1', thumb_path]
-                t_proc = await asyncio.create_subprocess_exec(*cmd_thumb, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-                await t_proc.wait()
+                thumb_data = USER_SETTINGS.get('__thumb_data')
+                if thumb_data:
+                    try:
+                        with open(thumb_path, "wb") as tf:
+                            tf.write(base64.b64decode(thumb_data))
+                    except:
+                        thumb_data = None
+                if not thumb_data:
+                    cmd_thumb = ['ffmpeg', '-y', '-ss', '00:00:05', '-i', output, '-vf', 'scale=320:-1', '-vframes', '1', thumb_path]
+                    t_proc = await asyncio.create_subprocess_exec(*cmd_thumb, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                    await t_proc.wait()
                 has_thumb = os.path.exists(thumb_path)
+
+                if has_thumb:
+                    ext = os.path.splitext(output)[1].lower()
+                    final_out = output + ".tmp"
+                    if ext == ".mkv":
+                        cmd_cover = ['ffmpeg', '-y', '-i', output, '-attach', thumb_path, '-metadata:s:t', 'mimetype=image/jpeg', '-c', 'copy', final_out]
+                    else:
+                        # Count existing streams to place cover art at the right index
+                        probe = await asyncio.create_subprocess_exec(
+                            'ffprobe', '-v', 'error', '-show_entries', 'stream=index', '-of', 'csv=p=0', output,
+                            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+                        )
+                        p_out, _ = await probe.communicate()
+                        stream_count = len(p_out.decode().strip().split('\n')) if p_out.decode().strip() else 0
+                        cmd_cover = ['ffmpeg', '-y', '-i', output, '-i', thumb_path, '-map', '0', '-map', '1', '-c', 'copy', f'-disposition:{stream_count}', 'attached_pic', final_out]
+                    cp = await asyncio.create_subprocess_exec(*cmd_cover, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                    await cp.wait()
+                    if cp.returncode == 0 and os.path.exists(final_out):
+                        os.remove(output)
+                        os.rename(final_out, output)
                 
-                up_format = USER_SETTINGS.get("upload_format", "document")
+                # Get upload format or fallback to video default
+                up_format = USER_SETTINGS.get("upload_format") or USER_SETTINGS.get("upload") or "document"
+                if str(up_format).lower().strip() not in ["video", "document"]:
+                    up_format = "video"
                 
                 target_chat = int(DUMP_ID) if DUMP_ID != "none" else CHAT_ID
                 thread = int(THREAD_ID) if THREAD_ID != "none" else None
@@ -346,16 +523,14 @@ try:
                 
                 try:
                     if up_format == "video":
-                        await app.send_video(
-                            chat_id=target_chat, message_thread_id=thread,
-                            video=output, thumb=thumb_path if has_thumb else None, caption=cap,
-                            progress=progress_bar, progress_args=(app, msg_id, "📤 Uploading Video")
+                        await safe_send_media(
+                            app, "video", target_chat, thread, output, thumb_path, cap, 
+                            has_thumb, progress_bar, msg_id, "📤 Uploading Video"
                         )
                     else:
-                        await app.send_document(
-                            chat_id=target_chat, document=output, reply_to_message_id=thread,
-                            thumb=thumb_path if has_thumb else None, caption=cap,
-                            progress=progress_bar, progress_args=(app, msg_id, "📤 Uploading Document")
+                        await safe_send_media(
+                            app, "document", target_chat, thread, output, thumb_path, cap, 
+                            has_thumb, progress_bar, msg_id, "📤 Uploading Document"
                         )
                     
                     if target_chat != CHAT_ID:
