@@ -137,10 +137,10 @@ try:
                 text = (
                     f"☁️ 𝗖 𝗟 𝗢 𝗨 𝗗   𝗡 𝗢 𝗗 𝗘\n"
                     f"╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n"
-                    f"𝗙𝗶𝗹𝗲  `{RENAME}`\n"
-                    f"𝗧𝗮𝘀𝗸  {action_text}\n"
-                    f"𝗟𝗼𝗮𝗱  {bar} {perc:.1f}%\n"
-                    f"𝗦𝗶𝘇𝗲  {current/(1024*1024):.1f} MB ⌁ {total/(1024*1024):.1f} MB\n"
+                    f"𝗙𝗶𝗹𝗲 ➫ `{RENAME}`\n"
+                    f"𝗧𝗮𝘀𝗸 ➫ {action_text}\n"
+                    f"𝗟𝗼𝗮𝗱 ➫ {bar} {perc:.1f}%\n"
+                    f"𝗦𝗶𝘇𝗲 ➫ {current/(1024*1024):.1f} MB ⌁ {total/(1024*1024):.1f} MB\n"
                     f"╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n"
                     f"⚡𝘌𝗻𝗴𝗶𝗻𝗲 𝘙𝘂𝗻𝗻𝗶𝗻𝗴 𝘉𝘆 - @Nika_Myboy"
                 )
@@ -453,15 +453,15 @@ try:
                                 bar_length = 10
                                 filled = int((perc / 100) * bar_length)
                                 bar = "▰" * filled + "▱" * (bar_length - filled)
-                                prog_text = f"𝗟𝗼𝗮𝗱  {bar} {perc:.2f}%\n〚 𝗦𝗽𝗲𝗲𝗱 〛 {speed:.2f}x\n〚 𝗘𝗧𝗔 〛 ~{get_readable_time(eta)}"
+                                prog_text = f"𝗟𝗼𝗮𝗱 ➫ {bar} {perc:.2f}%\n𝗦𝗽𝗲𝗲𝗱 ➫ {speed:.2f}x\n𝗘𝗧𝗔 ➫ {get_readable_time(eta)}"
                             else:
-                                prog_text = f"𝗟𝗼𝗮𝗱  Processed: {get_readable_time(cur)}\n〚 𝗦𝗽𝗲𝗲𝗱 〛 Unknown"
+                                prog_text = f"𝗟𝗼𝗮𝗱 ➫ Processed: {get_readable_time(cur)}\n𝗦𝗽𝗲𝗲𝗱 ➫ Unknown"
                                 
                             text = (
                                 f"☁️ 𝗖 𝗟 𝗢 𝗨 𝗗   𝗡 𝗢 𝗗 𝗘\n"
                                 f"╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n"
-                                f"𝗙𝗶𝗹𝗲  `{RENAME}`\n"
-                                f"𝗧𝗮𝘀𝗸 Processing Frame...\n"
+                                f"𝗙𝗶𝗹𝗲 ➫ `{RENAME}`\n"
+                                f"𝗧𝗮𝘀𝗸 ➫ Processing Frame...\n"
                                 f"{prog_text}\n"
                                 f"╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n"
                                 f"⚡𝘌𝗻𝗴𝗶𝗻𝗲 𝘙𝘂𝗻𝗻𝗶𝗻𝗴 𝘉𝘆 - @Nika_Myboy "
