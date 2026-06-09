@@ -458,13 +458,13 @@ try:
                                 prog_text = f"〚 𝗟𝗼𝗮𝗱 〛 Processed: {get_readable_time(cur)}\n〚 𝗦𝗽𝗲𝗲𝗱 〛 Unknown"
                                 
                             text = (
-                                f"『 ☁️ 𝗖 𝗟 𝗢 𝗨 𝗗   𝗡 𝗢 𝗗 𝗘 』\n"
+                                f"☁️ 𝗖 𝗟 𝗢 𝗨 𝗗   𝗡 𝗢 𝗗 𝗘\n"
                                 f"╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n"
-                                f"〚 𝗙𝗶𝗹𝗲 〛 `{RENAME}`\n"
-                                f"〚 𝗧𝗮𝘀𝗸 〛 Processing Frame...\n"
+                                f"𝗙𝗶𝗹𝗲  `{RENAME}`\n"
+                                f"𝗧𝗮𝘀𝗸 Processing Frame...\n"
                                 f"{prog_text}\n"
                                 f"╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n"
-                                f"⚡Zoro 𝘌𝗻𝗴𝗶𝗻𝗲 𝘙𝘂𝗻𝗻𝗶𝗻𝗴"
+                                f"𝘌𝗻𝗴𝗶𝗻𝗲 𝘙𝘂𝗻𝗻𝗶𝗻𝗴 𝘉𝘆 - @Nika_Myboy "
                             )
                             try: await app.edit_message_text(CHAT_ID, msg_id, text, reply_markup=cancel_kb)
                             except: pass
