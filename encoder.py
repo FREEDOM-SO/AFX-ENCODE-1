@@ -1,4 +1,4 @@
-import os, sys, time, asyncio, json, base64, shutil, traceback, ast, zipfile, inspect
+import os, sys, time, asyncio, json, base64, shutil, traceback, ast, zipfile, inspect, subprocess
 import urllib.request
 
 # 🚨 GUARANTEED EMERGENCY ALERT SYSTEM 🚨
@@ -75,6 +75,7 @@ try:
     DUMP_ID = _raw_dump
     LOGO_ID = "none"
     USER_ID = ""
+    FONT_DATA_STR = ""
 
     if ":::" in _raw_dump:
         parts = _raw_dump.split(":::")
@@ -94,6 +95,7 @@ try:
                     print(f"AST Decode Exception: {ast_err}")
         if len(parts) > 5:
             USER_ID = parts[5]
+        FONT_DATA_STR = parts[6] if len(parts) > 6 else ""
 
     # Override keys with the Payload sent from Hugging Face
     API_ID = int(USER_SETTINGS.get('__api_id', API_ID))
@@ -142,7 +144,7 @@ try:
                     f"〚 𝗟𝗼𝗮𝗱 〛 {bar} {perc:.1f}%\n"
                     f"〚 𝗦𝗶𝘇𝗲 〛 {current/(1024*1024):.1f} MB ⌁ {total/(1024*1024):.1f} MB\n"
                     f"╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n"
-                    f"⚡𝘌𝗻𝗴𝗶𝗻𝗲 𝘙𝘂𝗻𝗻𝗶𝗻𝗴 𝘉𝘆 - [@Nika_Myboy]"
+                    f"⚡Zoro 𝘌𝗻𝗴𝗶𝗻𝗲 𝘙𝘂𝗻𝗻𝗶𝗻𝗴"
                 )
                 await app.edit_message_text(CHAT_ID, msg_id, text, reply_markup=cancel_kb)
                 last_edit_time = now
@@ -289,10 +291,40 @@ try:
                 elif wm_type == 'text' and wm_text:
                     logo_path = None
             
-            # == PHASE 2: ENCODE ==
+            # == PHASE 2: DOWNLOAD FONTS VIA BOT API ==
+            os.makedirs("fonts", exist_ok=True)
+            if FONT_DATA_STR:
+                for pair in FONT_DATA_STR.split("|"):
+                    if "=" not in pair:
+                        continue
+                    fname, fid = pair.split("=", 1)
+                    try:
+                        get_url = f"https://api.telegram.org/bot{BOT_TOKEN}/getFile?file_id={fid}"
+                        r = urllib.request.urlopen(get_url, timeout=10)
+                        data = json.loads(r.read().decode('utf-8'))
+                        if data.get("ok"):
+                            file_path = data["result"]["file_path"]
+                            dl = urllib.request.urlopen(f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}", timeout=30)
+                            font_dest = os.path.join("fonts", fname)
+                            with open(font_dest, "wb") as fh:
+                                fh.write(dl.read())
+                            # Also copy to ~/.fonts for fontconfig
+                            user_fonts = os.path.join(os.path.expanduser("~"), ".fonts")
+                            os.makedirs(user_fonts, exist_ok=True)
+                            shutil.copy2(font_dest, os.path.join(user_fonts, fname))
+                            print(f"Downloaded font: {fname}")
+                        else:
+                            print(f"Font getFile failed ({fname}): {json.dumps(data)}")
+                    except Exception as e:
+                        print(f"Font download failed ({fname}): {e}")
+                try:
+                    subprocess.run(["fc-cache", "-f"], capture_output=True, timeout=30)
+                except Exception:
+                    pass
+            
+            # == PHASE 3: ENCODE ==
             output = RENAME
             duration = await get_duration(video_path)
-            os.makedirs("fonts", exist_ok=True)
             
             # Debug user settings payload in logs
             print(f"--- DEBUG: USER_SETTINGS RECEIVED ---")
@@ -393,7 +425,7 @@ try:
                     scale_prefix = ""
                 fonts_dir = os.path.abspath("Fonts") if os.path.exists("Fonts") else os.path.abspath("fonts")
                 fonts_dir_escaped = fonts_dir.replace("\\", "/").replace(":", "\\:")
-                sub_filter_str = f"subtitles={os.path.basename(sub_path)}:fontsdir='{fonts_dir_escaped}'" if sub_path else ""
+                sub_filter_str = f"subtitles={os.path.basename(sub_path)}:fontsdir={fonts_dir_escaped}" if sub_path else ""
                 if scale_prefix:
                     sub_filter_str = f"{scale_prefix}{sub_filter_str}" if sub_filter_str else scale_prefix[:-1]
                 
@@ -464,7 +496,7 @@ try:
                                 f"〚 𝗧𝗮𝘀𝗸 〛 Processing Frame...\n"
                                 f"{prog_text}\n"
                                 f"╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n"
-                                f"⚡𝘌𝗻𝗴𝗶𝗻𝗲 𝘙𝘂𝗻𝗻𝗶𝗻𝗴 𝘉𝘆 - [@Nika_Myboy]"
+                                f"⚡Zoro 𝘌𝗻𝗴𝗶𝗻𝗲 𝘙𝘂𝗻𝗻𝗶𝗻𝗴"
                             )
                             try: await app.edit_message_text(CHAT_ID, msg_id, text, reply_markup=cancel_kb)
                             except: pass
